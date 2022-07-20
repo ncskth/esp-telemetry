@@ -1,7 +1,5 @@
-#include "pt.h"
+#include <driver/spi_slave.h>
 
 void init_wifi();
 
-void update_wifi(struct pt *pt);
-
-void update_tcp_server(struct pt *pt);
+void send_data(spi_slave_transaction_t *trans);

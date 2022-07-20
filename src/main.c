@@ -10,64 +10,84 @@
 #include <nvs_flash.h>
 #include <driver/spi_slave.h>
 #include <hal/spi_hal.h>
+#include <driver/gpio.h>
 
-int udp_socket = -1;
+#include "hardware.h"
+#include "wifi.h"
 
 void init();
 void loop();
 
-void init_wifi();
+uint16_t rx = 0;
+DMA_ATTR uint8_t spi_buf1[SPI_MAX_DMA_LEN + 1];
+DMA_ATTR uint8_t spi_buf2[SPI_MAX_DMA_LEN + 1];
+
+spi_slave_transaction_t spi_trans1 = {
+    .rx_buffer = spi_buf1,
+    .length = SPI_MAX_DMA_LEN * 8,
+};
+spi_slave_transaction_t spi_trans2 = {
+    .rx_buffer = spi_buf2,
+    .length = SPI_MAX_DMA_LEN * 8,
+};
 
 void app_main() {
     init();
-    xTaskCreate(loop, "loop", 40000, NULL, 5, NULL);
+}
+
+IRAM_ATTR void spi_post_trans_cb(spi_slave_transaction_t *trans) {
+    GPIO.out_w1tc.val = (1<<PIN_DEBUG); //make pin low
+    spi_slave_get_trans_result(SPI2_HOST, &trans, 0);
+    send_data(trans);
+    spi_slave_queue_trans(SPI2_HOST, trans, 0);
+    rx = trans->trans_len / 8;
+}
+
+IRAM_ATTR void spi_post_setup_cb(spi_slave_transaction_t *trans) {
+    GPIO.out_w1ts.val = (1<<PIN_DEBUG); //make pin high
 }
 
 void init() {
-    nvs_flash_init();
-    esp_netif_init();
+    // misc
+    gpio_set_direction(PIN_DEBUG, GPIO_MODE_OUTPUT);
     esp_event_loop_create_default();
-    esp_netif_create_default_wifi_ap();
-    wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
-    spi_bus_config_t conf;
-    spi_bus_initialize(SPI2_HOST, &conf, SPI_DMA_CH_AUTO);
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = "esp_telemetry",
-            .password = "esp_telemetry",
-            .ssid_len = strlen("esp_telemetry"),
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
-            .max_connection = 4,
-            .channel = 7,
-        }
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    nvs_flash_init();
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    init_wifi();
+    printf("chungus\n");
 
-    udp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    fcntl(udp_socket, F_SETFL, O_NONBLOCK);
+    // SPI
+    spi_bus_config_t bus_conf = {
+        .max_transfer_sz = SPI_MAX_DMA_LEN,
+        .miso_io_num = PIN_MISO,
+        .mosi_io_num = -1, //only one way
+        .sclk_io_num = PIN_SCK,
+        .quadhd_io_num = -1,
+        .quadwp_io_num = -1,
+    };
+    spi_slave_interface_config_t slave_conf = {
+        .post_trans_cb = spi_post_trans_cb,
+        .post_setup_cb = spi_post_setup_cb,
+        .queue_size = 2,
+        .spics_io_num = PIN_CS
+    };
+    ESP_ERROR_CHECK(spi_slave_initialize(SPI2_HOST, &bus_conf, &slave_conf, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans1, 0));
+    ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans2, 0));
+
+    while (true) {
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        printf("rx %d\n", rx);
+        rx = 0;
+    }
 }
 
 void loop() {
-    uint8_t buf[3048];
-    uint8_t counter = 0;
-    while (true) {
-        struct sockaddr_in dest_addr;
-        dest_addr.sin_addr.s_addr = inet_addr("192.168.4.2");
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(1338);
-        buf[0] = counter++;
-        // sendto(udp_socket, buf, 1000, MSG_DONTWAIT, &dest_addr, sizeof(dest_addr));
-        sendto(udp_socket, buf, 1500, MSG_DONTWAIT, &dest_addr, sizeof(dest_addr));
-        sendto(udp_socket, buf, 1500, MSG_DONTWAIT, &dest_addr, sizeof(dest_addr));
-        if (sendto(udp_socket, buf, 1500, MSG_DONTWAIT, &dest_addr, sizeof(dest_addr) == 0)) {
-            printf("sent\n");
-        } else {
-            printf("didn't send %d\n", errno);
-        }
-        vTaskDelay(1);
-    }
+
 }
