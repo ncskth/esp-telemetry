@@ -8,7 +8,7 @@
 #include <errno.h>
 #include <string.h>
 
-#define DEFAULT_SSID "NCSpeople2"
+#define DEFAULT_SSID "NCSpeople"
 #define DEFAULT_PASSWORD "peopleNCS"
 
 #define TCP_PORT 55671
