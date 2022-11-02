@@ -6,10 +6,14 @@
 #include <netdb.h>
 #include <driver/spi_slave.h>
 #include <errno.h>
+#include <string.h>
 
-#define DEFAULT_SSID "NCSpeople"
+#define DEFAULT_SSID "NCSpeople2"
 #define DEFAULT_PASSWORD "peopleNCS"
+
 #define TCP_PORT 55671
+
+// #define AP
 
 uint8_t user_ssid[32];
 uint8_t user_password[64];
@@ -17,10 +21,13 @@ uint8_t user_password[64];
 uint16_t udp_port = -1;
 int udp_socket = -1;
 int tcp_socket = -1;
-int udp_enabled = -1;
+
+int udp_enabled = false;
 bool wifi_connected = false;
 volatile struct sockaddr_in udp_addr;
 TaskHandle_t udp_sender_handle;
+QueueHandle_t udp_queue;
+spi_slave_transaction_t *trans_to_send;
 
 wifi_config_t wifi_config = {
     .sta = {
@@ -38,16 +45,31 @@ wifi_config_t wifi_config = {
     },
 };
 
+
+
+wifi_config_t wifi_config_ap = {
+    .ap = {
+        .ssid = "esp_test",
+        .ssid_len = strlen("esp_test"),
+        // .password = "esp_test",
+        .authmode = WIFI_AUTH_OPEN,
+        .max_connection = 10,
+    },
+};
+ 
 IRAM_ATTR void send_data(spi_slave_transaction_t *trans) {
     int has_awaken;
-    xTaskNotifyFromISR(udp_sender_handle, trans, eSetValueWithOverwrite, &has_awaken);
+    // xQueueSendFromISR(udp_queue, trans, &has_awaken);
+    vTaskNotifyGiveFromISR(udp_sender_handle, &has_awaken);
+    trans_to_send = trans;
+    portYIELD_FROM_ISR();
 }
 
 // returns 1 if error
-bool yielding_read(uint8_t *buf, uint8_t len) {
+bool yielding_read(int client, uint8_t *buf, uint8_t len) {
     uint8_t received = 0;
     while (received != len) {
-        int bytes_received = recv(tcp_socket, buf + received, len - received, MSG_DONTWAIT);
+        int bytes_received = recv(client, buf + received, len - received, MSG_DONTWAIT);
 
         if (bytes_received < 0 ) {
             if (errno == ERR_WOULDBLOCK) {
@@ -72,10 +94,16 @@ bool yielding_read(uint8_t *buf, uint8_t len) {
 
 void udp_sender_task() {
     while (true) {
-        spi_slave_transaction_t *trans;
-        xTaskNotifyWait(0, 0, &trans, portMAX_DELAY);
+        uint8_t buf[4096] = "LOLCAT123";
+        spi_slave_transaction_t trans;
+        // xQueueReceive(udp_queue, &trans, portMAX_DELAY);
+        // xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        vTaskDelay(1);
+        trans = *trans_to_send;
         if (udp_enabled && wifi_connected) {
-            sendto(udp_socket, trans->rx_buffer, trans->trans_len / 8, &udp_addr, sizeof(udp_addr), MSG_DONTWAIT);
+            // int e = sendto(udp_socket, trans.rx_buffer, trans.trans_len / 8, MSG_DONTWAIT, &udp_addr, sizeof(udp_addr))
+            sendto(udp_socket, buf, sizeof(buf), MSG_DONTWAIT, &udp_addr, sizeof(udp_addr));
+            // printf("sent %d %d %d %dbytes\n", trans.length, trans.user, e, errno);
         }
     }
 }
@@ -90,29 +118,38 @@ void tcp_server_task(void *user) {
     while (1) {
         vTaskDelay(10);
         if (!wifi_connected) {
-            printf("no wifi\n");
-            vTaskDelay(10);
+            // printf("no wifi\n");
+            vTaskDelay(100);
             continue;
         }
         int client_socket = -1;
         client_socket = accept(tcp_socket,(struct sockaddr *)&remote_addr, &socklen);
         
         if (client_socket < 0) {
-            printf("no client %d %d %d %d\n", client_socket, errno, tcp_socket, udp_socket);            
+            // printf("no client\n");
+            vTaskDelay(100);
             continue;
         }
         fcntl(tcp_socket, F_SETFL, O_NONBLOCK);
         printf("got client\n");
-
         // handle client loop
         while (1) {
             uint8_t id;
-            if (yielding_read(&id, 1)) {
+            if (yielding_read(client_socket, &id, 1)) {
                 break;
             }
 
-            if (id == 0) { // update wifi config
-                if (yielding_read(&rx_buf, 96)) {
+            printf("got id %d\n", id);
+            if (id == 0) { // handshake
+                if (yielding_read(client_socket, rx_buf, 96)) {
+                    break;
+                }
+                uint8_t response = 42;
+                send(client_socket, &response, 1, 0);
+            }
+
+            if (id == 1) { // update wifi config
+                if (yielding_read(client_socket, rx_buf, 96)) {
                     break;
                 }
                 memcpy(user_ssid, rx_buf, 32);
@@ -121,35 +158,34 @@ void tcp_server_task(void *user) {
                 nvs_open("storage", NVS_READWRITE, &nvs);
                 nvs_set_blob(nvs, "user_ssid", user_ssid, sizeof(user_ssid));
                 nvs_set_blob(nvs, "user_password", user_password, sizeof(user_password));
+                uint8_t ack = 1;
+                send(client_socket, &ack, 1, 0);
             }
 
             if (id == 32) { // start streaming
-                if (yielding_read(&rx_buf, 6)) {
+                if (yielding_read(client_socket, rx_buf, 6)) {
                     break;
                 }
-                memcpy(&udp_addr.sin_addr, rx_buf, 4); // get ip, network order
-                memcpy(&udp_addr.sin_port, rx_buf + 4, 2); // get port, network order
-                udp_enabled = 1;
-                char* addr = inet_ntoa(udp_addr);
-                printf(addr);
-                printf("\n");
-            }
-
-            if (id == 33) { // download firmware
-                if (yielding_read(&rx_buf, 6)) {
-                    break;
-                }
-                uint64_t ip;
+                uint32_t addr;
                 uint16_t port;
-                memcpy(&ip, rx_buf, 4); // get ip, network order
+                memcpy(&addr, rx_buf, 4); // get ip, network order
                 memcpy(&port, rx_buf + 4, 2); // get port, network order
+                udp_addr.sin_addr.s_addr = addr;
+                udp_addr.sin_port = port;
+                udp_addr.sin_family = AF_INET;
+                udp_enabled = 1;
+                char* char_addr = inet_ntoa(udp_addr);
+                uint8_t ack = 1;
+                send(client_socket, &ack, 1, 0);
             }
-            vTaskDelay(10);
+            
+            vTaskDelay(100);
         }// handle client loop
     }// accept client loop
 }
 
 void got_ip_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data) {
+    printf("wifi connected\n");
     struct sockaddr_in tcpServerAddr = {
         .sin_addr.s_addr = htonl(INADDR_ANY),
         .sin_family = AF_INET,
@@ -171,6 +207,7 @@ void got_ip_handler(void* handler_args, esp_event_base_t base, int32_t id, void*
 }
 
 void wifi_disconnected_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data) {
+    printf("wifi disconnected\n");
     if (wifi_connected) {
         close(tcp_socket);
         close(udp_socket);
@@ -195,30 +232,51 @@ void wifi_disconnected_handler(void* handler_args, esp_event_base_t base, int32_
 
 void init_wifi () {
     esp_netif_init();
+
+    #ifdef AP
+    esp_netif_create_default_wifi_ap();
+    #else
     esp_netif_create_default_wifi_sta();
+    #endif
     wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
     nvs_handle_t nvs;
     uint err, len;
+    len = 255;
     err = nvs_open("storage", NVS_READWRITE, &nvs);
-    err = nvs_get_blob(nvs, "user_ssid", &user_ssid, &len);
-    err = nvs_get_blob(nvs, "user_password", &user_password, &len);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
+    err |= nvs_get_blob(nvs, "user_ssid", &user_ssid, &len);
+    err |= nvs_get_blob(nvs, "user_password", &user_password, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND || true) {
         nvs_set_blob(nvs, "user_ssid", DEFAULT_SSID, sizeof(DEFAULT_SSID));
         nvs_set_blob(nvs, "user_password", DEFAULT_PASSWORD, sizeof(DEFAULT_PASSWORD));
+        memcpy(user_ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
+        memcpy(user_password, DEFAULT_PASSWORD, sizeof(DEFAULT_PASSWORD));
     }
-
     memcpy(wifi_config.sta.ssid, user_ssid, sizeof(user_ssid));
     memcpy(wifi_config.sta.password, user_password, sizeof(user_password));
+
+    ESP_ERROR_CHECK(esp_wifi_set_country_code("SE", true));
+
+    #ifdef AP
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+    #else
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_set_country_code("SE", true));
+    #endif
     ESP_ERROR_CHECK(esp_wifi_start());
+    #ifdef AP
+    printf("%s %sn", wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
+    vTaskDelay(500);
+    got_ip_handler(NULL, NULL, NULL, NULL);
+    #else
     ESP_ERROR_CHECK(esp_wifi_connect());
+    #endif
     esp_wifi_set_ps(WIFI_PS_NONE);
 
+    udp_queue = xQueueCreate(2, sizeof(spi_slave_transaction_t));
     esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_disconnected_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, got_ip_handler, NULL, NULL);
     xTaskCreate(tcp_server_task, "tcp_server", 5000, NULL, 2, NULL);
-    xTaskCreate(udp_sender_task, "udp sender", 1000, NULL, 3, &udp_sender_handle);
+    xTaskCreate(udp_sender_task, "udp sender", 5000, NULL, 3, &udp_sender_handle);
 }
