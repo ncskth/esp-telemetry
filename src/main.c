@@ -12,6 +12,7 @@
 #include <hal/spi_hal.h>
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include <driver/ledc.h>
 
 #include "hardware.h"
 #include "wifi.h"
@@ -64,7 +65,29 @@ IRAM_ATTR void spi_post_setup_cb(spi_slave_transaction_t *trans) {
 }
 
 void init() {
-    esp_log_level_set("*", ESP_LOG_VERBOSE);
+    ledc_timer_config_t led_timer_conf = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .duty_resolution = LEDC_TIMER_1_BIT,
+        .freq_hz = 40e6L,
+        .clk_cfg = LEDC_APB_CLK
+    };
+    ledc_channel_config_t led_channel_conf= {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = 0,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = PIN_DEBUG_CLOCK,
+        .duty = 0,
+        .hpoint = 0
+    };
+
+    ledc_timer_config(&led_timer_conf);
+    ledc_channel_config(&led_channel_conf);
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 1);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+
     // misc
     gpio_set_direction(PIN_DEBUG, GPIO_MODE_OUTPUT);
     esp_event_loop_create_default();

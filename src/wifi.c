@@ -49,14 +49,29 @@ wifi_config_t wifi_config = {
 
 wifi_config_t wifi_config_ap = {
     .ap = {
-        .ssid = "esp_test",
-        .ssid_len = strlen("esp_test"),
-        // .password = "esp_test",
-        .authmode = WIFI_AUTH_OPEN,
+        .ssid = "bajskorvimunnen",
+        .ssid_len = strlen("bajskorvimunnen"),
+        .password = "bajskorvimunnen",
+        .authmode = WIFI_AUTH_WPA_WPA2_PSK,
         .max_connection = 10,
     },
 };
- 
+
+void scan_wifi() {
+    esp_wifi_scan_start(NULL, true);
+    uint16_t number = 64;
+    uint16_t ap_count;
+    wifi_ap_record_t ap_info[64];
+
+    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&number, ap_info));
+    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
+    printf("networks found %d\n", ap_count);
+    for (int i = 0; i < ap_count; i++) {
+        printf("-----------------------------------------\n");
+        printf("SSID:\t%s RSSI:\t%d channel:\t%d\n", ap_info[i].ssid, ap_info[i].rssi, ap_info[i].primary);
+    }
+}
+
 IRAM_ATTR void send_data(spi_slave_transaction_t *trans) {
     int has_awaken;
     // xQueueSendFromISR(udp_queue, trans, &has_awaken);
@@ -124,7 +139,7 @@ void tcp_server_task(void *user) {
         }
         int client_socket = -1;
         client_socket = accept(tcp_socket,(struct sockaddr *)&remote_addr, &socklen);
-        
+
         if (client_socket < 0) {
             // printf("no client\n");
             vTaskDelay(100);
@@ -178,7 +193,7 @@ void tcp_server_task(void *user) {
                 uint8_t ack = 1;
                 send(client_socket, &ack, 1, 0);
             }
-            
+
             vTaskDelay(100);
         }// handle client loop
     }// accept client loop
@@ -225,7 +240,7 @@ void wifi_disconnected_handler(void* handler_args, esp_event_base_t base, int32_
         memcpy(wifi_config.sta.password, DEFAULT_PASSWORD, sizeof(DEFAULT_PASSWORD));
         ping = 1;
     }
-    
+
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_connect(); // a failed connect sends a disconnected event
 }
@@ -265,9 +280,9 @@ void init_wifi () {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     #endif
     ESP_ERROR_CHECK(esp_wifi_start());
+    scan_wifi();
     #ifdef AP
-    printf("%s %sn", wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
-    vTaskDelay(500);
+    printf("%s %s\n", wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
     got_ip_handler(NULL, NULL, NULL, NULL);
     #else
     ESP_ERROR_CHECK(esp_wifi_connect());
