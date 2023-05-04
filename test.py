@@ -19,6 +19,7 @@ def get_ip():
         IP = "127.0.0.1"
     finally:
         s.close()
+    # return "192.168.4.2"
     return IP
 
 def send(buf):
@@ -39,7 +40,7 @@ def udp_thread():
         buf = udp_socket.recv(10000)
         if (len(buf) == 0):
             continue
-        received += len(buf)        
+        received += len(buf)
         if buf[0] != frame_number:
             delta = buf[0] - frame_number
             if delta <= 0:

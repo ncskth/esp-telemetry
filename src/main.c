@@ -13,6 +13,7 @@
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <driver/ledc.h>
+#include <driver/uart.h>
 
 #include "hardware.h"
 #include "wifi.h"
@@ -65,6 +66,11 @@ IRAM_ATTR void spi_post_setup_cb(spi_slave_transaction_t *trans) {
 }
 
 void init() {
+    #ifndef CONSOLE_ENABLED
+    uart_set_pin(UART_NUM_0, -1, -1, -1, -1);
+    #endif
+
+    #ifdef CLOCK_ENABLED
     ledc_timer_config_t led_timer_conf = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .timer_num = LEDC_TIMER_0,
@@ -77,16 +83,15 @@ void init() {
         .channel = LEDC_CHANNEL_0,
         .timer_sel = 0,
         .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = PIN_DEBUG_CLOCK,
+        .gpio_num = PIN_SCK,
         .duty = 0,
         .hpoint = 0
     };
-
     ledc_timer_config(&led_timer_conf);
     ledc_channel_config(&led_channel_conf);
-
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 1);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    #endif
 
     // misc
     gpio_set_direction(PIN_DEBUG, GPIO_MODE_OUTPUT);
@@ -100,9 +105,13 @@ void init() {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
-    init_wifi();
 
-    // SPI
+    #ifdef WIFI_ENABLED
+    init_wifi();
+    #endif
+
+    // // SPI
+    #ifdef SPI_ENABLED
     spi_bus_config_t bus_conf = {
         .max_transfer_sz = SPI_MAX_DMA_LEN,
         .miso_io_num = -1,
@@ -120,8 +129,8 @@ void init() {
     ESP_ERROR_CHECK(spi_slave_initialize(SPI2_HOST, &bus_conf, &slave_conf, SPI_DMA_CH_AUTO));
     ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans1, 0));
     ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans2, 0));
-}
+    #endif
 
-void loop() {
-
+    #ifdef UART_ENABLED
+    #endif
 }

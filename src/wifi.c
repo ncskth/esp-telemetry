@@ -13,8 +13,6 @@
 
 #define TCP_PORT 55671
 
-// #define AP
-
 uint8_t user_ssid[32];
 uint8_t user_password[64];
 
@@ -49,10 +47,10 @@ wifi_config_t wifi_config = {
 
 wifi_config_t wifi_config_ap = {
     .ap = {
-        .ssid = "bajskorvimunnen",
-        .ssid_len = strlen("bajskorvimunnen"),
-        .password = "bajskorvimunnen",
-        .authmode = WIFI_AUTH_WPA_WPA2_PSK,
+        .ssid = "esptest1234",
+        .ssid_len = strlen("esptest1234"),
+        .password = "esptest1234",
+        .authmode = WIFI_AUTH_OPEN,
         .max_connection = 10,
     },
 };
@@ -108,6 +106,7 @@ bool yielding_read(int client, uint8_t *buf, uint8_t len) {
 }
 
 void udp_sender_task() {
+    #ifdef BW_TEST
     while (true) {
         uint8_t buf[4096] = "LOLCAT123";
         spi_slave_transaction_t trans;
@@ -121,6 +120,21 @@ void udp_sender_task() {
             // printf("sent %d %d %d %dbytes\n", trans.length, trans.user, e, errno);
         }
     }
+    #else
+    while (true) {
+        uint8_t buf[4096] = "LOLCAT123";
+        spi_slave_transaction_t trans;
+        // xQueueReceive(udp_queue, &trans, portMAX_DELAY);
+        // xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        vTaskDelay(1);
+        trans = *trans_to_send;
+        if (udp_enabled && wifi_connected) {
+            // int e = sendto(udp_socket, trans.rx_buffer, trans.trans_len / 8, MSG_DONTWAIT, &udp_addr, sizeof(udp_addr))
+            sendto(udp_socket, buf, sizeof(buf), MSG_DONTWAIT, &udp_addr, sizeof(udp_addr));
+            // printf("sent %d %d %d %dbytes\n", trans.length, trans.user, e, errno);
+        }
+    }
+    #endif
 }
 
 void tcp_server_task(void *user) {
