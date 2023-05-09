@@ -13,7 +13,7 @@
 
 #define TCP_PORT 55671
 
-// #define AP
+#define AP
 
 uint8_t user_ssid[32];
 uint8_t user_password[64];
@@ -54,6 +54,7 @@ wifi_config_t wifi_config_ap = {
         .password = "bajskorvimunnen",
         .authmode = WIFI_AUTH_WPA_WPA2_PSK,
         .max_connection = 10,
+        .channel = 12,
     },
 };
 
@@ -219,6 +220,7 @@ void got_ip_handler(void* handler_args, esp_event_base_t base, int32_t id, void*
     udp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     fcntl(udp_socket, F_SETFL, O_NONBLOCK);
     wifi_connected = 1;
+
 }
 
 void wifi_disconnected_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data) {
@@ -287,7 +289,9 @@ void init_wifi () {
     #else
     ESP_ERROR_CHECK(esp_wifi_connect());
     #endif
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+
+    esp_wifi_set_max_tx_power(11 * 4);
 
     udp_queue = xQueueCreate(2, sizeof(spi_slave_transaction_t));
     esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_disconnected_handler, NULL, NULL);

@@ -39,7 +39,7 @@ def udp_thread():
         buf = udp_socket.recv(10000)
         if (len(buf) == 0):
             continue
-        received += len(buf)        
+        received += len(buf)
         if buf[0] != frame_number:
             delta = buf[0] - frame_number
             if delta <= 0:
@@ -54,7 +54,7 @@ def udp_thread():
         frame_number = (frame_number + 1) % 256
 
         if time.time() - last_print > 1:
-            print(f"time scale {round(time.time() - last_print, 4)}")
+            print(f"time scale {round(time.time(), 4)}")
             print(f"bandwidth {received} B/s")
             print(f"bandwidth {round(received * 8 / 1000000, 2)} Mb/s")
             print(f"lost {lost_frames}   \t got {received_frames}\t total {lost_frames + received_frames},\t packet loss ratio {round(lost_frames / (lost_frames + received_frames), 2)}")

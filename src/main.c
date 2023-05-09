@@ -13,6 +13,7 @@
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <driver/ledc.h>
+#include <driver/temp_sensor.h>
 
 #include "hardware.h"
 #include "wifi.h"
@@ -65,6 +66,12 @@ IRAM_ATTR void spi_post_setup_cb(spi_slave_transaction_t *trans) {
 }
 
 void init() {
+    temp_sensor_config_t temp_sensor = {
+        .dac_offset = TSENS_DAC_L0,
+        .clk_div = 6,
+    };
+    temp_sensor_set_config(temp_sensor);
+
     ledc_timer_config_t led_timer_conf = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .timer_num = LEDC_TIMER_0,
@@ -77,7 +84,7 @@ void init() {
         .channel = LEDC_CHANNEL_0,
         .timer_sel = 0,
         .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = PIN_DEBUG_CLOCK,
+        .gpio_num = PIN_SCK,
         .duty = 0,
         .hpoint = 0
     };
@@ -102,26 +109,30 @@ void init() {
     }
     init_wifi();
 
-    // SPI
-    spi_bus_config_t bus_conf = {
-        .max_transfer_sz = SPI_MAX_DMA_LEN,
-        .miso_io_num = -1,
-        .mosi_io_num = PIN_MOSI, //only one way
-        .sclk_io_num = PIN_SCK,
-        .quadhd_io_num = -1,
-        .quadwp_io_num = -1,
-    };
-    spi_slave_interface_config_t slave_conf = {
-        .post_trans_cb = spi_post_trans_cb,
-        .post_setup_cb = spi_post_setup_cb,
-        .queue_size = 4,
-        .spics_io_num = PIN_CS
-    };
-    ESP_ERROR_CHECK(spi_slave_initialize(SPI2_HOST, &bus_conf, &slave_conf, SPI_DMA_CH_AUTO));
-    ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans1, 0));
-    ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans2, 0));
+    // // SPI
+    // spi_bus_config_t bus_conf = {
+    //     .max_transfer_sz = SPI_MAX_DMA_LEN,
+    //     .miso_io_num = -1,
+    //     .mosi_io_num = PIN_MOSI, //only one way
+    //     .sclk_io_num = PIN_SCK,
+    //     .quadhd_io_num = -1,
+    //     .quadwp_io_num = -1,
+    // };
+    // spi_slave_interface_config_t slave_conf = {
+    //     .post_trans_cb = spi_post_trans_cb,
+    //     .post_setup_cb = spi_post_setup_cb,
+    //     .queue_size = 4,
+    //     .spics_io_num = PIN_CS
+    // };
+    // ESP_ERROR_CHECK(spi_slave_initialize(SPI2_HOST, &bus_conf, &slave_conf, SPI_DMA_CH_AUTO));
+    // ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans1, 0));
+    // ESP_ERROR_CHECK(spi_slave_queue_trans(SPI2_HOST, &spi_trans2, 0));
+
+    while (1) {
+        float tsens_out;
+        temp_sensor_read_celsius(&tsens_out);
+        printf("temperature: %f\n", tsens_out);
+        vTaskDelay(1000);
+    }
 }
 
-void loop() {
-
-}
