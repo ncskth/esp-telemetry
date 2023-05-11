@@ -7,6 +7,8 @@
 #include <driver/spi_slave.h>
 #include <errno.h>
 #include <string.h>
+#include <esp_ota_ops.h>
+#include <driver/temp_sensor.h>
 
 #define DEFAULT_SSID "NCSpeople"
 #define DEFAULT_PASSWORD "peopleNCS"
@@ -142,7 +144,7 @@ void tcp_server_task(void *user) {
 	unsigned int socklen;
 	socklen = sizeof(remote_addr);
     uint8_t rx_buf[128];
-    uint8_t tx_buf[32];
+    uint8_t tx_buf[128];
 
     while (1) {
         vTaskDelay(10);
@@ -190,6 +192,21 @@ void tcp_server_task(void *user) {
                 uint8_t ack = 1;
                 send(client_socket, &ack, 1, 0);
             }
+            if (id == 2) { // get temperature
+                float temp;
+                temp_sensor_read_celsius(&temp);
+                uint8_t resp = temp;
+                send(client_socket, &resp, 1, 0);
+            }
+            if (id == 3) { //set txpower (unit is in 1/4dBm)
+                uint8_t tx_power;
+                if (yielding_read(client_socket, &tx_power, 1)) {
+                    break;
+                }
+                esp_wifi_set_max_tx_power(tx_power);
+                uint8_t ack = 1;
+                send(client_socket, &ack, 1, 0);
+            }
 
             if (id == 32) { // start streaming
                 if (yielding_read(client_socket, rx_buf, 6)) {
@@ -208,8 +225,72 @@ void tcp_server_task(void *user) {
                 send(client_socket, &ack, 1, 0);
             }
 
+            if (id == 42) { // download firmware
+                uint64_t size; // little endian
+                uint64_t written = 0;
+                if (yielding_read(client_socket, &size, 8)) {
+                    break;
+                }
+                printf("starting firmware update with size%lld\n", size);
+                if (size == 0) { // confirming prior update
+                    const esp_partition_t *part = esp_ota_get_running_partition();
+                    esp_ota_img_states_t state;
+                    esp_ota_get_state_partition(part, &state);
+                    if (state == ESP_OTA_IMG_NEW || state == ESP_OTA_IMG_PENDING_VERIFY) {
+                        int e = esp_ota_mark_app_valid_cancel_rollback();
+                        if (e == 0) {
+                            uint8_t ack = 1;
+                            send(client_socket, &ack, 1, 0);
+                            printf("confirmed update\n");
+                        } else {
+                            uint8_t nak = 0;
+                            send(client_socket, &nak, 1, 0);
+                            printf("Something went wrong when confirming\n");
+                        }
+                    } else {
+                        uint8_t nak = 0;
+                        send(client_socket, &nak, 1, 0);
+                        printf("update confirmation not needed %d\n", state);
+                    }
+                } else {
+                    esp_partition_t *ota_partition;
+                    esp_ota_handle_t ota_handle;
+                    uint8_t stop = false;
+                    ota_partition = esp_ota_get_next_update_partition(NULL);
+                    if (ota_partition == NULL) {
+                        printf("ota partitions is null\n");
+                    }
+                    esp_err_t err = esp_ota_begin(ota_partition, size, &ota_handle);
+                    if (err) {
+                        printf("esp_ota_begin returned %d\n", err);
+                        printf("%s\n", esp_err_to_name(err));
+                    }
+
+                    while (written < size) {
+                        uint16_t to_read = (size - written) > sizeof(rx_buf) ? sizeof(rx_buf) : (size - written);
+                        if (yielding_read(client_socket, rx_buf, to_read)) {
+                            stop = true;
+                            break;
+                        }
+                        written += to_read;
+                        esp_ota_write(ota_handle, rx_buf, to_read);
+                    }
+                    if (stop) {
+                        break;
+                    }
+                    esp_ota_end(ota_handle);
+                    esp_ota_set_boot_partition(ota_partition);
+                    uint8_t ack = 1;
+                    send(client_socket, &ack, 1, 0);
+                    printf("Update done, restarting\n");
+                    vTaskDelay(500);
+                    esp_restart();
+                }
+            }
+
             vTaskDelay(100);
         }// handle client loop
+        close(client_socket);
     }// accept client loop
 }
 
@@ -301,8 +382,8 @@ void init_wifi () {
     #else
     ESP_ERROR_CHECK(esp_wifi_connect());
     #endif
-    esp_wifi_set_ps(WIFI_PS_NONE);
-
+    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+    esp_wifi_set_max_tx_power(11*4);
     udp_queue = xQueueCreate(2, sizeof(spi_slave_transaction_t));
     esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_disconnected_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, got_ip_handler, NULL, NULL);

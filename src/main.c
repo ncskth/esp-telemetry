@@ -14,6 +14,7 @@
 #include <esp_log.h>
 #include <driver/ledc.h>
 #include <driver/uart.h>
+#include <driver/temp_sensor.h>
 
 #include "hardware.h"
 #include "wifi.h"
@@ -66,6 +67,13 @@ IRAM_ATTR void spi_post_setup_cb(spi_slave_transaction_t *trans) {
 }
 
 void init() {
+    temp_sensor_config_t temp_sensor = {
+        .dac_offset = TSENS_DAC_L0,
+        .clk_div = 6,
+    };
+    temp_sensor_set_config(temp_sensor);
+    temp_sensor_start();
+
     #ifndef CONSOLE_ENABLED
     uart_set_pin(UART_NUM_0, -1, -1, -1, -1);
     #endif
